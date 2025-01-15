@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the image in RGB format
-image = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f0.jpg')
+image = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_u649.jpg')
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB format
 
 # Split the image into its Red, Green, and Blue channels
@@ -34,7 +34,7 @@ def apply_gain_control(channel, gain):
     return img_back
 
 # Apply gain control to each channel (adjusting the gain factors)
-r_corrected = apply_gain_control(r_channel, gain=2.0)  # Increase red channel
+r_corrected = apply_gain_control(r_channel, gain=0.9)  # Increase red channel
 g_corrected = apply_gain_control(g_channel, gain=1.0)  # Keep green the same
 b_corrected = apply_gain_control(b_channel, gain=1.1)  # Slightly increase blue
 
