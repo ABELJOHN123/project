@@ -62,11 +62,11 @@ def main(image_path, gain_factors):
     plt.show()
 
 # Path to the input image and gain factors for each channel
-image_path = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_u648.jpg"
+image_path = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f30.jpg"
 gain_factors = {'R': 2.0, 'G': 1.0, 'B': 1.9}
 
 # Run the main function
 try:
     main(image_path, gain_factors)
-except FileNotFoundError as e:
-    print(e)
+except FileNotFoundError as e:
+    print(e)

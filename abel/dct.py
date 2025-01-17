@@ -3,11 +3,11 @@ import cv2
 import pywt
 import matplotlib.pyplot as plt
 
-def gain_control_frequency(img, gain_factor=1.8):
+def gain_control_frequency(img, gain_factor=1.5):
     # Convert the image to float32 for more precision during FFT
     img = np.float32(img)
 
-    # Perform FFT to move to the frequency domain
+    # Perform FFT to move to frequency domain
     f = np.fft.fftshift(np.fft.fft2(img))
 
     # Apply gain control (amplify frequency components)
@@ -21,19 +21,15 @@ def gain_control_frequency(img, gain_factor=1.8):
 
     return img_gain_controlled
 
-def dwt_enhancement(img, wavelet='haar', level=1):
-    # Convert to grayscale if not already
-    if len(img.shape) == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Perform Discrete Wavelet Transform (DWT)
+def dwt_enhancement(img, wavelet='db1', level=1):
+    # Perform Discrete Wavelet Transform (DWT) for enhancement
     coeffs2 = pywt.dwt2(img, wavelet)
     LL, (LH, HL, HH) = coeffs2
 
     # Enhance the high-frequency details by amplifying LH, HL, and HH
-    LH_enhanced = LH * 1.8  # Enhance horizontal details
-    HL_enhanced = HL * 1.8  # Enhance vertical details
-    HH_enhanced = HH * 1.8  # Enhance diagonal details
+    LH_enhanced = LH * 1.5  # Enhance horizontal details
+    HL_enhanced = HL * 1.5  # Enhance vertical details
+    HH_enhanced = HH * 1.5  # Enhance diagonal details
 
     # Reconstruct the image from enhanced coefficients
     img_enhanced = pywt.idwt2((LL, (LH_enhanced, HL_enhanced, HH_enhanced)), wavelet)
@@ -43,18 +39,15 @@ def dwt_enhancement(img, wavelet='haar', level=1):
 
     return img_enhanced
 
-# Load the provided image file
-img = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f46.jpg')  # Replace with your image file path
+# Load an image
+img = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f32.jpg')  # Make sure the image path is correct
 
 # Check if the image is loaded properly
 if img is None:
     print("Error: Image not found. Please check the file path.")
 else:
-    # Convert to grayscale for processing
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     # Apply Gain Control in Frequency Domain
-    img_gain_controlled = gain_control_frequency(img_gray)
+    img_gain_controlled = gain_control_frequency(img)
 
     # Apply DWT for enhancement
     img_enhanced = dwt_enhancement(img_gain_controlled)
@@ -65,10 +58,11 @@ else:
     plt.title("Original Image")
 
     plt.subplot(1, 3, 2)
-    plt.imshow(img_gain_controlled, cmap='gray')
+    plt.imshow(cv2.cvtColor(img_gain_controlled, cv2.COLOR_BGR2RGB))
     plt.title("Gain Controlled Image")
 
     plt.subplot(1, 3, 3)
-    plt.imshow(img_enhanced, cmap='gray')
+    plt.imshow(cv2.cvtColor(img_enhanced, cv2.COLOR_BGR2RGB))
     plt.title("DWT Enhanced Image")
+
     plt.show()
