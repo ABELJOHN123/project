@@ -1,68 +1,189 @@
-import numpy as np
 import cv2
-import pywt
+import numpy as np
 import matplotlib.pyplot as plt
+import os
 
-def gain_control_frequency(img, gain_factor=1.5):
-    # Convert the image to float32 for more precision during FFT
-    img = np.float32(img)
+def apply_low_pass_filter(dft_shift, cutoff_radius=30):
+    """
+    Applies a low-pass filter to the frequency domain representation of the image.
+    Args:
+        dft_shift (numpy.ndarray): Shifted DFT of the image.
+        cutoff_radius (int): Radius for the low-pass filter.
+    Returns:
+        numpy.ndarray: DFT with low-pass filter applied.
+    """
+    rows, cols = dft_shift.shape
+    crow, ccol = rows // 2, cols // 2
 
-    # Perform FFT to move to frequency domain
-    f = np.fft.fftshift(np.fft.fft2(img))
+    # Create a mask with a circular low-pass filter
+    mask = np.zeros((rows, cols), np.float32)
+    cv2.circle(mask, (ccol, crow), cutoff_radius, 1, thickness=-1)
 
-    # Apply gain control (amplify frequency components)
-    f_gain_controlled = f * gain_factor
+    # Apply mask to the frequency domain
+    dft_shift_filtered = dft_shift * mask
+    return dft_shift_filtered
 
-    # Inverse FFT to bring the image back to the spatial domain
-    img_gain_controlled = np.abs(np.fft.ifft2(np.fft.ifftshift(f_gain_controlled)))
-    
-    # Normalize the result to range [0, 255]
-    img_gain_controlled = np.uint8(np.clip(img_gain_controlled, 0, 255))
+def apply_gain_control_in_frequency_domain(image, gain=1.0, red_gain=1.0, low_pass_radius=30):
+    """
+    Applies gain control to the image in the frequency domain with noise reduction.
+    Args:
+        image (numpy.ndarray): Input BGR image.
+        gain (float): Gain factor for blue and green channels.
+        red_gain (float): Gain factor for the red channel.
+        low_pass_radius (int): Radius of the low-pass filter to reduce noise.
+    Returns:
+        numpy.ndarray: Gain-corrected BGR image with noise reduction.
+    """
+    channels = cv2.split(image)
+    corrected_channels = []
 
-    return img_gain_controlled
+    for i, channel in enumerate(channels):
+        # Perform Fourier Transform
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
 
-def dwt_enhancement(img, wavelet='db1', level=1):
-    # Perform Discrete Wavelet Transform (DWT) for enhancement
-    coeffs2 = pywt.dwt2(img, wavelet)
-    LL, (LH, HL, HH) = coeffs2
+        # Apply low-pass filter to reduce high-frequency noise
+        dft_shift_filtered = apply_low_pass_filter(dft_shift, cutoff_radius=low_pass_radius)
 
-    # Enhance the high-frequency details by amplifying LH, HL, and HH
-    LH_enhanced = LH * 1.5  # Enhance horizontal details
-    HL_enhanced = HL * 1.5  # Enhance vertical details
-    HH_enhanced = HH * 1.5  # Enhance diagonal details
+        magnitude = np.abs(dft_shift_filtered)
+        phase = np.angle(dft_shift_filtered)
 
-    # Reconstruct the image from enhanced coefficients
-    img_enhanced = pywt.idwt2((LL, (LH_enhanced, HL_enhanced, HH_enhanced)), wavelet)
+        # Apply different gain for the red channel
+        current_gain = red_gain if i == 2 else gain
+        magnitude = magnitude * current_gain
 
-    # Normalize the result to range [0, 255]
-    img_enhanced = np.uint8(np.clip(img_enhanced, 0, 255))
+        # Reconstruct the modified DFT
+        modified_dft_shift = magnitude * np.exp(1j * phase)
+        modified_dft = np.fft.ifftshift(modified_dft_shift)
 
-    return img_enhanced
+        # Perform Inverse Fourier Transform
+        corrected_channel = np.fft.ifft2(modified_dft).real
+        corrected_channel = np.clip(corrected_channel, 0, 255).astype(np.uint8)
 
-# Load an image
-img = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f32.jpg')  # Make sure the image path is correct
+        # Apply histogram equalization
+        corrected_channel = cv2.equalizeHist(corrected_channel)
 
-# Check if the image is loaded properly
-if img is None:
-    print("Error: Image not found. Please check the file path.")
-else:
-    # Apply Gain Control in Frequency Domain
-    img_gain_controlled = gain_control_frequency(img)
+        corrected_channels.append(corrected_channel)
 
-    # Apply DWT for enhancement
-    img_enhanced = dwt_enhancement(img_gain_controlled)
+    corrected_image = cv2.merge(corrected_channels)
+    return corrected_image
 
-    # Display the original, gain-controlled, and enhanced images
-    plt.subplot(1, 3, 1)
-    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    plt.title("Original Image")
+def enhance_in_frequency_domain_bgr(image, high_boost_factor=1.2, low_pass_radius=30):
+    """
+    Enhances the image in the frequency domain with noise reduction.
+    Args:
+        image (numpy.ndarray): Input BGR image.
+        high_boost_factor (float): High-boost filtering factor.
+        low_pass_radius (int): Radius of the low-pass filter to reduce noise.
+    Returns:
+        numpy.ndarray: Enhanced BGR image with noise reduction.
+    """
+    channels = cv2.split(image)
+    enhanced_channels = []
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(cv2.cvtColor(img_gain_controlled, cv2.COLOR_BGR2RGB))
-    plt.title("Gain Controlled Image")
+    for channel in channels:
+        # Perform Fourier Transform
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(cv2.cvtColor(img_enhanced, cv2.COLOR_BGR2RGB))
-    plt.title("DWT Enhanced Image")
+        # Apply low-pass filter to reduce high-frequency noise
+        dft_shift_filtered = apply_low_pass_filter(dft_shift, cutoff_radius=low_pass_radius)
 
+        rows, cols = channel.shape
+        crow, ccol = rows // 2, cols // 2
+        radius = 50  # Radius for high-pass filter
+        mask = np.ones((rows, cols), np.float32)
+        cv2.circle(mask, (ccol, crow), radius, 0, thickness=-1)
+
+        # High-pass filtering
+        high_pass = dft_shift_filtered * mask
+        high_boost = dft_shift_filtered + high_boost_factor * high_pass
+
+        # Inverse Fourier Transform
+        inv_dft_shift = np.fft.ifftshift(high_boost)
+        enhanced_channel = np.fft.ifft2(inv_dft_shift).real
+        enhanced_channel = np.clip(enhanced_channel, 0, 255).astype(np.uint8)
+
+        enhanced_channels.append(enhanced_channel)
+
+    enhanced_bgr = cv2.merge(enhanced_channels)
+    return enhanced_bgr
+
+def match_hr_image_to_enhanced(image, hr_image):
+    """
+    Matches the enhanced image to the HR image by applying histogram matching.
+    Args:
+        image (numpy.ndarray): Enhanced image.
+        hr_image (numpy.ndarray): High-resolution reference image.
+    Returns:
+        numpy.ndarray: Enhanced image adjusted to match HR image characteristics.
+    """
+    # Check if the image dimensions match, if not, resize the enhanced image
+    if image.shape != hr_image.shape:
+        print(f"Resizing enhanced image from {image.shape} to {hr_image.shape}")
+        image_resized = cv2.resize(image, (hr_image.shape[1], hr_image.shape[0]))
+    else:
+        image_resized = image
+
+    matched_image = cv2.cvtColor(image_resized, cv2.COLOR_BGR2YCrCb)
+    hr_image_ycrcb = cv2.cvtColor(hr_image, cv2.COLOR_BGR2YCrCb)
+
+    # Match the Y channel (intensity)
+    matched_image[:, :, 0] = cv2.equalizeHist(hr_image_ycrcb[:, :, 0])
+
+    # Convert back to BGR
+    matched_image_bgr = cv2.cvtColor(matched_image, cv2.COLOR_YCrCb2BGR)
+
+    return matched_image_bgr
+
+# Set input and HR folder paths
+input_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images"
+hr_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\hrr"
+
+input_images = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
+hr_images = [os.path.join(hr_folder, f) for f in os.listdir(hr_folder) if f.endswith(('.jpg', '.png'))]
+
+# Load images
+images = [cv2.imread(path) for path in input_images]
+hr_images_list = [cv2.imread(path) for path in hr_images]
+
+# Apply gain control to all images
+corrected_images = [apply_gain_control_in_frequency_domain(image, gain=1.5, red_gain=1.0, low_pass_radius=30) for image in images]
+
+# Apply enhancement to gain-controlled images
+enhanced_images = [enhance_in_frequency_domain_bgr(image, high_boost_factor=1.2, low_pass_radius=30) for image in corrected_images]
+
+# Match the enhanced images to HR images
+matched_images = [match_hr_image_to_enhanced(enhanced, hr) for enhanced, hr in zip(enhanced_images, hr_images_list)]
+
+# Display the images side by side for comparison
+for i, (original, corrected, enhanced, hr, matched) in enumerate(zip(images, corrected_images, enhanced_images, hr_images_list, matched_images)):
+    plt.figure(figsize=(18, 5))
+
+    plt.subplot(1, 5, 1)
+    plt.imshow(cv2.cvtColor(original, cv2.COLOR_BGR2RGB))
+    plt.title(f"Original {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 5, 2)
+    plt.imshow(cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB))
+    plt.title(f"Gain-Controlled {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 5, 3)
+    plt.imshow(cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB))
+    plt.title(f"Enhanced {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 5, 4)
+    plt.imshow(cv2.cvtColor(hr, cv2.COLOR_BGR2RGB))
+    plt.title(f"HR {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 5, 5)
+    plt.imshow(cv2.cvtColor(matched, cv2.COLOR_BGR2RGB))
+    plt.title(f"Matched {i+1}")
+    plt.axis('off')
+
+    plt.tight_layout()
     plt.show()

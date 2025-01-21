@@ -1,111 +1,111 @@
 import cv2
 import numpy as np
-from scipy.fftpack import dct, idct
+import matplotlib.pyplot as plt
+import os
 
-def apply_dct(image_channel):
-    block_size = 8  # DCT block size
-    height, width = image_channel.shape
-    dct_transformed = np.zeros_like(image_channel, dtype=np.float32)
-
-    for i in range(0, height, block_size):
-        for j in range(0, width, block_size):
-            block = image_channel[i:i+block_size, j:j+block_size]
-            dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
-            dct_transformed[i:i+block_size, j:j+block_size] = dct_block
-    
-    return dct_transformed
-
-def apply_idct(dct_transformed):
-    block_size = 8  # DCT block size
-    height, width = dct_transformed.shape
-    reconstructed = np.zeros_like(dct_transformed, dtype=np.float32)
-
-    for i in range(0, height, block_size):
-        for j in range(0, width, block_size):
-            block = dct_transformed[i:i+block_size, j:j+block_size]
-            idct_block = idct(idct(block.T, norm='ortho').T, norm='ortho')
-            reconstructed[i:i+block_size, j:j+block_size] = idct_block
-    
-    return reconstructed
-
-def correct_colors(image, reference_image):
+def apply_gain_control_in_frequency_domain(image, gain, red_gain=1.0):
     """
-    Correct the colors in an image to match a reference image using DCT-based adjustments.
+    Applies gain control to the image in the frequency domain and equalizes the RGB channels.
+
+    Args:
+        image (numpy.ndarray): Input BGR image.
+        gain (float): Gain factor to adjust amplitude in the frequency domain for blue and green channels.
+        red_gain (float): Gain factor to adjust amplitude in the frequency domain for the red channel.
+
+    Returns:
+        numpy.ndarray: Gain-corrected and equalized BGR image.
     """
-    image = image.astype(np.float32) / 255.0
-    reference_image = reference_image.astype(np.float32) / 255.0
-    
-    b, g, r = cv2.split(image)
-    br, gr, rr = cv2.split(reference_image)
+    # Split the image into B, G, R channels
+    channels = cv2.split(image)
+    corrected_channels = []
 
-    # Apply DCT on each channel of both the input and reference image
-    b_dct = apply_dct(b)
-    g_dct = apply_dct(g)
-    r_dct = apply_dct(r)
-    
-    br_dct = apply_dct(br)
-    gr_dct = apply_dct(gr)
-    rr_dct = apply_dct(rr)
+    for i, channel in enumerate(channels):
+        # Perform Fourier Transform on each channel
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
 
-    # Match the low-frequency components (first few DCT coefficients) between the input and reference image
-    b_dct[0:4, 0:4] = br_dct[0:4, 0:4]
-    g_dct[0:4, 0:4] = gr_dct[0:4, 0:4]
-    r_dct[0:4, 0:4] = rr_dct[0:4, 0:4]
+        # Apply gain control by scaling the amplitude
+        magnitude = np.abs(dft_shift)
+        phase = np.angle(dft_shift)
 
-    # Reconstruct the image using IDCT
-    b_corrected = apply_idct(b_dct)
-    g_corrected = apply_idct(g_dct)
-    r_corrected = apply_idct(r_dct)
+        # Use different gain for the red channel
+        current_gain = red_gain if i == 2 else gain
+        magnitude = magnitude * current_gain
 
-    corrected_image = cv2.merge((b_corrected, g_corrected, r_corrected))
-    corrected_image = np.clip(corrected_image * 255.0, 0, 255).astype(np.uint8)
+        # Reconstruct the frequency domain representation
+        modified_dft_shift = magnitude * np.exp(1j * phase)
+        modified_dft = np.fft.ifftshift(modified_dft_shift)
+
+        # Perform Inverse Fourier Transform
+        corrected_channel = np.fft.ifft2(modified_dft).real
+
+        # Normalize the output to fit in [0, 255] range
+        corrected_channel = cv2.normalize(corrected_channel, None, 0, 255, cv2.NORM_MINMAX)
+
+        # Apply histogram equalization to improve the contrast of the channel
+        corrected_channel = cv2.equalizeHist(corrected_channel.astype(np.uint8))
+
+        corrected_channels.append(corrected_channel)
+
+    # Merge the corrected channels back into a BGR image
+    corrected_image = cv2.merge(corrected_channels)
+
     return corrected_image
 
-def calculate_psnr(original, corrected):
-    mse = np.mean((original - corrected) ** 2)
-    if mse == 0:
-        return float('inf')  # Perfect match
-    psnr = 20 * np.log10(255.0 / np.sqrt(mse))
-    return psnr
+# Set input and HR folder paths
+input_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images"  # Replace with your input folder path
+hr_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\hrr"  # Replace with your HR folder path
 
-# Load images
-input_image_path = r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f32.jpg'
-hr_image_path = r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\hrr\set_f32hr.jpg'
+# Get list of images from both folders
+input_images = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
+hr_images = [os.path.join(hr_folder, f) for f in os.listdir(hr_folder) if f.endswith(('.jpg', '.png'))]
 
-input_image = cv2.imread(input_image_path)
-if input_image is None:
-    raise ValueError(f"Input image not found: {input_image_path}")
+# Print counts of images in both folders
+print(f"Input images count: {len(input_images)}")
+print(f"HR images count: {len(hr_images)}")
 
-hr_image = cv2.imread(hr_image_path)
-if hr_image is None:
-    raise ValueError(f"High-resolution (HR) image not found: {hr_image_path}")
+# Check if both folders have the same number of images
+if len(input_images) != len(hr_images):
+    print("Warning: The number of images in input_images and hr_images folders do not match.")
+    # Optionally, raise an error or handle the mismatch here
+    # raise ValueError("The number of images in input_images and hr_images folders must be the same.")
+    # For now, continue processing the images regardless of mismatch
 
-# Correct the input image based on HR image
-corrected_image = correct_colors(input_image, hr_image)
+# Load the images
+images = [cv2.imread(path) for path in input_images]
+hr_images_list = [cv2.imread(path) for path in hr_images]
 
-# Resize all images to the same dimensions as the HR image
-height, width = hr_image.shape[:2]
-input_image_resized = cv2.resize(input_image, (width, height))
-corrected_image_resized = cv2.resize(corrected_image, (width, height))
+# Ensure images were loaded successfully
+for idx, image in enumerate(images + hr_images_list):
+    if image is None:
+        raise FileNotFoundError(f"Image not found. Please provide a valid path.")
 
-# Calculate PSNR values
-psnr_input_hr = calculate_psnr(input_image_resized, hr_image)
-psnr_corrected_hr = calculate_psnr(corrected_image_resized, hr_image)
+# Apply gain control to all images
+corrected_images = [apply_gain_control_in_frequency_domain(image, gain=1.5, red_gain=0.8) for image in images]
 
-# Combine images for side-by-side comparison
-comparison = np.hstack((input_image_resized, corrected_image_resized, hr_image))
+# Display each set of images together in a single window
+for i, (original, corrected, hr) in enumerate(zip(images, corrected_images, hr_images_list)):
+    # Create a figure with 1 row and 3 columns (for input, corrected, and HR images)
+    plt.figure(figsize=(15, 5))
 
-# Add labels to the comparison
-font = cv2.FONT_HERSHEY_SIMPLEX
-comparison = cv2.putText(comparison, "Input Image", (50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
-comparison = cv2.putText(comparison, "Corrected Image", (width + 50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
-comparison = cv2.putText(comparison, "HR Image", (2 * width + 50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+    # Plot the original image
+    plt.subplot(1, 3, 1)
+    plt.imshow(cv2.cvtColor(original, cv2.COLOR_BGR2RGB))
+    plt.title(f"Original Image {i + 1}")
+    plt.axis('off')
 
-# Display the results
-window_title = f'Comparison | PSNR (Input-HR): {psnr_input_hr:.2f} dB | PSNR (Corrected-HR): {psnr_corrected_hr:.2f} dB'
-cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
-cv2.imshow(window_title, comparison)
+    # Plot the corrected image
+    plt.subplot(1, 3, 2)
+    plt.imshow(cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB))
+    plt.title(f"Corrected Image {i + 1}")
+    plt.axis('off')
 
-# Wait for a key press to close
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    # Plot the HR image
+    plt.subplot(1, 3, 3)
+    plt.imshow(cv2.cvtColor(hr, cv2.COLOR_BGR2RGB))
+    plt.title(f"HR Image {i + 1}")
+    plt.axis('off')
+
+    # Display the images side by side
+    plt.tight_layout()
+    plt.show()

@@ -1,111 +1,177 @@
 import cv2
 import numpy as np
-from scipy.fftpack import dct, idct
+import matplotlib.pyplot as plt
+import os
 
-def apply_dct(image_channel):
-    block_size = 8  # DCT block size
-    height, width = image_channel.shape
-    dct_transformed = np.zeros_like(image_channel, dtype=np.float32)
-
-    for i in range(0, height, block_size):
-        for j in range(0, width, block_size):
-            block = image_channel[i:i+block_size, j:j+block_size]
-            dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
-            dct_transformed[i:i+block_size, j:j+block_size] = dct_block
-    
-    return dct_transformed
-
-def apply_idct(dct_transformed):
-    block_size = 8  # DCT block size
-    height, width = dct_transformed.shape
-    reconstructed = np.zeros_like(dct_transformed, dtype=np.float32)
-
-    for i in range(0, height, block_size):
-        for j in range(0, width, block_size):
-            block = dct_transformed[i:i+block_size, j:j+block_size]
-            idct_block = idct(idct(block.T, norm='ortho').T, norm='ortho')
-            reconstructed[i:i+block_size, j:j+block_size] = idct_block
-    
-    return reconstructed
-
-def correct_colors(image, reference_image):
+def apply_low_pass_filter(dft_shift, cutoff_radius=15):
     """
-    Correct the colors in an image to match a reference image using DCT-based adjustments.
+    Applies a low-pass filter to the frequency domain representation of the image.
     """
-    image = image.astype(np.float32) / 255.0
-    reference_image = reference_image.astype(np.float32) / 255.0
-    
-    b, g, r = cv2.split(image)
-    br, gr, rr = cv2.split(reference_image)
+    rows, cols = dft_shift.shape
+    crow, ccol = rows // 2, cols // 2
 
-    # Apply DCT on each channel of both the input and reference image
-    b_dct = apply_dct(b)
-    g_dct = apply_dct(g)
-    r_dct = apply_dct(r)
-    
-    br_dct = apply_dct(br)
-    gr_dct = apply_dct(gr)
-    rr_dct = apply_dct(rr)
+    # Create a mask with a circular low-pass filter
+    mask = np.zeros((rows, cols), np.float32)
+    cv2.circle(mask, (ccol, crow), cutoff_radius, 1, thickness=-1)
 
-    # Match the low-frequency components (first few DCT coefficients) between the input and reference image
-    b_dct[0:4, 0:4] = br_dct[0:4, 0:4]
-    g_dct[0:4, 0:4] = gr_dct[0:4, 0:4]
-    r_dct[0:4, 0:4] = rr_dct[0:4, 0:4]
+    # Apply mask to the frequency domain
+    dft_shift_filtered = dft_shift * mask
+    return dft_shift_filtered
 
-    # Reconstruct the image using IDCT
-    b_corrected = apply_idct(b_dct)
-    g_corrected = apply_idct(g_dct)
-    r_corrected = apply_idct(r_dct)
+def apply_gain_control_in_frequency_domain(image, gain=1.1, red_gain=1.0, low_pass_radius=15):
+    """
+    Applies gain control in the frequency domain with noise reduction.
+    """
+    channels = cv2.split(image)
+    corrected_channels = []
 
-    corrected_image = cv2.merge((b_corrected, g_corrected, r_corrected))
-    corrected_image = np.clip(corrected_image * 255.0, 0, 255).astype(np.uint8)
+    for i, channel in enumerate(channels):
+        # Perform Fourier Transform
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
+
+        # Apply low-pass filter to reduce high-frequency noise
+        dft_shift_filtered = apply_low_pass_filter(dft_shift, cutoff_radius=low_pass_radius)
+
+        magnitude = np.abs(dft_shift_filtered)
+        phase = np.angle(dft_shift_filtered)
+
+        # Apply different gain for the red channel
+        current_gain = red_gain if i == 2 else gain
+        magnitude = magnitude * current_gain
+
+        # Reconstruct the modified DFT
+        modified_dft_shift = magnitude * np.exp(1j * phase)
+        modified_dft = np.fft.ifftshift(modified_dft_shift)
+
+        # Perform Inverse Fourier Transform
+        corrected_channel = np.fft.ifft2(modified_dft).real
+        corrected_channel = np.clip(corrected_channel, 0, 255).astype(np.uint8)
+
+        # Apply histogram equalization
+        corrected_channel = cv2.equalizeHist(corrected_channel)
+
+        corrected_channels.append(corrected_channel)
+
+    corrected_image = cv2.merge(corrected_channels)
     return corrected_image
 
-def calculate_psnr(original, corrected):
-    mse = np.mean((original - corrected) ** 2)
-    if mse == 0:
-        return float('inf')  # Perfect match
-    psnr = 20 * np.log10(255.0 / np.sqrt(mse))
-    return psnr
+def enhance_in_frequency_domain_bgr(image, high_boost_factor=1.2, low_pass_radius=15):
+    """
+    Enhances the image in the frequency domain with noise reduction.
+    """
+    channels = cv2.split(image)
+    enhanced_channels = []
+
+    for channel in channels:
+        # Perform Fourier Transform
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
+
+        # Apply low-pass filter to reduce high-frequency noise
+        dft_shift_filtered = apply_low_pass_filter(dft_shift, cutoff_radius=low_pass_radius)
+
+        rows, cols = channel.shape
+        crow, ccol = rows // 2, cols // 2
+        radius = 50  # Radius for high-pass filter
+        mask = np.ones((rows, cols), np.float32)
+        cv2.circle(mask, (ccol, crow), radius, 0, thickness=-1)
+
+        # High-pass filtering
+        high_pass = dft_shift_filtered * mask
+        high_boost = dft_shift_filtered + high_boost_factor * high_pass
+
+        # Inverse Fourier Transform
+        inv_dft_shift = np.fft.ifftshift(high_boost)
+        enhanced_channel = np.fft.ifft2(inv_dft_shift).real
+        enhanced_channel = np.clip(enhanced_channel, 0, 255).astype(np.uint8)
+
+        enhanced_channels.append(enhanced_channel)
+
+    enhanced_bgr = cv2.merge(enhanced_channels)
+    return enhanced_bgr
+
+def match_hr_image_to_enhanced(image, hr_image):
+    """
+    Matches the enhanced image to the HR image by applying histogram matching.
+    """
+    # Resize enhanced image if necessary
+    if image.shape != hr_image.shape:
+        image_resized = cv2.resize(image, (hr_image.shape[1], hr_image.shape[0]))
+    else:
+        image_resized = image
+
+    matched_image = cv2.cvtColor(image_resized, cv2.COLOR_BGR2YCrCb)
+    hr_image_ycrcb = cv2.cvtColor(hr_image, cv2.COLOR_BGR2YCrCb)
+
+    # Match the Y channel (intensity)
+    matched_image[:, :, 0] = cv2.equalizeHist(hr_image_ycrcb[:, :, 0])
+
+    matched_image_bgr = cv2.cvtColor(matched_image, cv2.COLOR_YCrCb2BGR)
+    return matched_image_bgr
+
+def apply_edge_preserving_filter(image):
+    """
+    Apply bilateral filter for edge-preserving smoothing.
+    """
+    return cv2.bilateralFilter(image, 9, 75, 75)
+
+# Set input and HR folder paths
+input_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images"
+hr_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\hrr"
+
+input_images = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(('.jpg', '.png'))]
+hr_images = [os.path.join(hr_folder, f) for f in os.listdir(hr_folder) if f.endswith(('.jpg', '.png'))]
 
 # Load images
-input_image_path = r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f32.jpg'
-hr_image_path = r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\hrr\set_f32hr.jpg'
+images = [cv2.imread(path) for path in input_images]
+hr_images_list = [cv2.imread(path) for path in hr_images]
 
-input_image = cv2.imread(input_image_path)
-if input_image is None:
-    raise ValueError(f"Input image not found: {input_image_path}")
+# Apply gain control to all images
+corrected_images = [apply_gain_control_in_frequency_domain(image, gain=1.1, red_gain=1.0, low_pass_radius=15) for image in images]
 
-hr_image = cv2.imread(hr_image_path)
-if hr_image is None:
-    raise ValueError(f"High-resolution (HR) image not found: {hr_image_path}")
+# Apply enhancement to gain-controlled images
+enhanced_images = [enhance_in_frequency_domain_bgr(image, high_boost_factor=1.2, low_pass_radius=15) for image in corrected_images]
 
-# Correct the input image based on HR image
-corrected_image = correct_colors(input_image, hr_image)
+# Apply edge-preserving filter after gain control to reduce blur
+sharpened_images = [apply_edge_preserving_filter(image) for image in corrected_images]
 
-# Resize all images to the same dimensions as the HR image
-height, width = hr_image.shape[:2]
-input_image_resized = cv2.resize(input_image, (width, height))
-corrected_image_resized = cv2.resize(corrected_image, (width, height))
+# Match the enhanced images to HR images
+matched_images = [match_hr_image_to_enhanced(enhanced, hr) for enhanced, hr in zip(enhanced_images, hr_images_list)]
 
-# Calculate PSNR values
-psnr_input_hr = calculate_psnr(input_image_resized, hr_image)
-psnr_corrected_hr = calculate_psnr(corrected_image_resized, hr_image)
+# Display the images side by side for comparison
+for i, (original, corrected, sharpened, enhanced, hr, matched) in enumerate(zip(images, corrected_images, sharpened_images, enhanced_images, hr_images_list, matched_images)):
+    plt.figure(figsize=(18, 5))
 
-# Combine images for side-by-side comparison
-comparison = np.hstack((input_image_resized, corrected_image_resized, hr_image))
+    plt.subplot(1, 6, 1)
+    plt.imshow(cv2.cvtColor(original, cv2.COLOR_BGR2RGB))
+    plt.title(f"Original {i+1}")
+    plt.axis('off')
 
-# Add labels to the comparison
-font = cv2.FONT_HERSHEY_SIMPLEX
-comparison = cv2.putText(comparison, "Input Image", (50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
-comparison = cv2.putText(comparison, "Corrected Image", (width + 50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
-comparison = cv2.putText(comparison, "HR Image", (2 * width + 50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+    plt.subplot(1, 6, 2)
+    plt.imshow(cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB))
+    plt.title(f"Gain-Controlled {i+1}")
+    plt.axis('off')
 
-# Display the results
-window_title = f'Comparison | PSNR (Input-HR): {psnr_input_hr:.2f} dB | PSNR (Corrected-HR): {psnr_corrected_hr:.2f} dB'
-cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
-cv2.imshow(window_title, comparison)
+    plt.subplot(1, 6, 3)
+    plt.imshow(cv2.cvtColor(sharpened, cv2.COLOR_BGR2RGB))
+    plt.title(f"Sharpened {i+1}")
+    plt.axis('off')
 
-# Wait for a key press to close
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    plt.subplot(1, 6, 4)
+    plt.imshow(cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB))
+    plt.title(f"Enhanced {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 6, 5)
+    plt.imshow(cv2.cvtColor(hr, cv2.COLOR_BGR2RGB))
+    plt.title(f"HR {i+1}")
+    plt.axis('off')
+
+    plt.subplot(1, 6, 6)
+    plt.imshow(cv2.cvtColor(matched, cv2.COLOR_BGR2RGB))
+    plt.title(f"Matched {i+1}")
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()

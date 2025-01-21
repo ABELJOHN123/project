@@ -1,74 +1,83 @@
-import numpy as np
 import cv2
-import pywt
+import numpy as np
 import matplotlib.pyplot as plt
 
-def gain_control_frequency(img, gain_factor=1.8):
-    # Convert the image to float32 for more precision during FFT
-    img = np.float32(img)
+def frequency_domain_correction(image, alpha=0.2, d0=30):
+    """
+    Applies underwater color correction using frequency domain techniques.
+    """
+    # Convert to float and split channels
+    b, g, r = cv2.split(image.astype(np.float32))
 
-    # Perform FFT to move to the frequency domain
-    f = np.fft.fftshift(np.fft.fft2(img))
+    def apply_fft(channel):
+        dft = np.fft.fft2(channel)
+        dft_shift = np.fft.fftshift(dft)
+        magnitude = np.abs(dft_shift)
+        phase = np.angle(dft_shift)
+        return magnitude, phase
 
-    # Apply gain control (amplify frequency components)
-    f_gain_controlled = f * gain_factor
+    # Compute FFT for each channel
+    mag_r, phase_r = apply_fft(r)
+    mag_g, phase_g = apply_fft(g)
+    mag_b, phase_b = apply_fft(b)
 
-    # Inverse FFT to bring the image back to the spatial domain
-    img_gain_controlled = np.abs(np.fft.ifft2(np.fft.ifftshift(f_gain_controlled)))
-    
-    # Normalize the result to range [0, 255]
-    img_gain_controlled = np.uint8(np.clip(img_gain_controlled, 0, 255))
+    # Compute mean values
+    mean_r, mean_g, mean_b = np.mean(r), np.mean(g), np.mean(b)
 
-    return img_gain_controlled
+    # Red & Blue channel compensation (reduce the effect of alpha to avoid blur)
+    mag_r = mag_r + alpha * (mean_g - mean_r) * 0.5  # Reduce the impact of compensation
+    mag_b = mag_b + alpha * (mean_g - mean_b) * 0.5  # Reduce the impact of compensation
 
-def dwt_enhancement(img, wavelet='haar', level=1):
-    # Convert to grayscale if not already
-    if len(img.shape) == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Perform Discrete Wavelet Transform (DWT)
-    coeffs2 = pywt.dwt2(img, wavelet)
-    LL, (LH, HL, HH) = coeffs2
+    def apply_ifft(mag, phase):
+        dft_shift = mag * np.exp(1j * phase)
+        dft = np.fft.ifftshift(dft_shift)
+        corrected_channel = np.fft.ifft2(dft).real
+        return np.clip(corrected_channel, 0, 255).astype(np.uint8)
 
-    # Enhance the high-frequency details by amplifying LH, HL, and HH
-    LH_enhanced = LH * 1.8  # Enhance horizontal details
-    HL_enhanced = HL * 1.8  # Enhance vertical details
-    HH_enhanced = HH * 1.8  # Enhance diagonal details
+    # Apply inverse FFT
+    r_corrected = apply_ifft(mag_r, phase_r)
+    b_corrected = apply_ifft(mag_b, phase_b)
 
-    # Reconstruct the image from enhanced coefficients
-    img_enhanced = pywt.idwt2((LL, (LH_enhanced, HL_enhanced, HH_enhanced)), wavelet)
+    # Merge channels
+    corrected_image = cv2.merge((b_corrected, g.astype(np.uint8), r_corrected))
 
-    # Normalize the result to range [0, 255]
-    img_enhanced = np.uint8(np.clip(img_enhanced, 0, 255))
+    # Convert to LAB color space and apply CLAHE with reduced contrast enhancement
+    lab = cv2.cvtColor(corrected_image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))  # Reduced clipLimit to decrease enhancement
+    l = clahe.apply(l)
+    final_image = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
-    return img_enhanced
+    return final_image
 
-# Load the provided image file
-img = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_f46.jpg')  # Replace with your image file path
+# Load the input image
+input_image = cv2.imread(r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_o12.jpg")
 
-# Check if the image is loaded properly
-if img is None:
-    print("Error: Image not found. Please check the file path.")
-else:
-    # Convert to grayscale for processing
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# Apply frequency domain correction
+corrected_image = frequency_domain_correction(input_image, alpha=0.2)
 
-    # Apply Gain Control in Frequency Domain
-    img_gain_controlled = gain_control_frequency(img_gray)
+# Apply CLAHE directly to original image (for enhancement comparison)
+lab_original = cv2.cvtColor(input_image, cv2.COLOR_BGR2LAB)
+l_orig, a_orig, b_orig = cv2.split(lab_original)
+clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))  # Same reduction of contrast enhancement
+l_orig = clahe.apply(l_orig)
+enhanced_image = cv2.cvtColor(cv2.merge((l_orig, a_orig, b_orig)), cv2.COLOR_LAB2BGR)
 
-    # Apply DWT for enhancement
-    img_enhanced = dwt_enhancement(img_gain_controlled)
+# Display results
+plt.figure(figsize=(15, 10))    
+plt.subplot(1, 3, 1)
+plt.imshow(cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB))
+plt.title("Original Image")
+plt.axis('off')
 
-    # Display the original, gain-controlled, and enhanced images
-    plt.subplot(1, 3, 1)
-    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    plt.title("Original Image")
+plt.subplot(1, 3, 2)
+plt.imshow(cv2.cvtColor(corrected_image, cv2.COLOR_BGR2RGB))
+plt.title("Color Corrected Image")
+plt.axis('off')
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(img_gain_controlled, cmap='gray')
-    plt.title("Gain Controlled Image")
+plt.subplot(1, 3, 3)
+plt.imshow(cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2RGB))
+plt.title("Enhanced Image with CLAHE")
+plt.axis('off')
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(img_enhanced, cmap='gray')
-    plt.title("DWT Enhanced Image")
-    plt.show()
+plt.show()
