@@ -3,7 +3,7 @@ import numpy as np
 import pywt
 import os
 
-# Function to apply DWT-based image enhancement with histogram equalization, contrast stretching, and sharpening
+# Function to apply DWT-based image enhancement
 def dwt_image_enhancement(img):
     # Split the image into BGR channels
     b, g, r = cv2.split(img)
@@ -13,27 +13,12 @@ def dwt_image_enhancement(img):
         coeffs2 = pywt.dwt2(channel, 'haar')  # Using Haar wavelet (you can change the wavelet type)
         LL, (LH, HL, HH) = coeffs2
 
-        # Enhancement by modifying high-frequency components (amplify more aggressively)
-        LH = np.multiply(LH, 2.0)  # Amplify horizontal details more aggressively
-        HL = np.multiply(HL, 2.0)  # Amplify vertical details more aggressively
-        HH = np.multiply(HH, 2.5)  # Amplify diagonal details more
+        # Enhancement by modifying high-frequency components
+        LH = np.multiply(LH, 1.5)  # Amplify horizontal details
+        HL = np.multiply(HL, 1.5)  # Amplify vertical details
+        HH = np.multiply(HH, 2.0)  # Amplify diagonal details
 
-        # Apply Histogram Equalization to improve the global contrast of the channel
-        channel_equalized = cv2.equalizeHist(channel)
-
-        # Apply Contrast Limited Adaptive Histogram Equalization (CLAHE) for local contrast
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))  # CLAHE with stronger enhancement
-        channel_stretched = clahe.apply(channel_equalized)
-
-        # Apply Unsharp Masking for clarity enhancement
-        blurred = cv2.GaussianBlur(channel_stretched, (5, 5), 0)
-        unsharp_mask = cv2.addWeighted(channel_stretched, 1.5, blurred, -0.5, 0)
-
-        # Apply sharpening filter (high-pass filter) to the high-frequency components
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])  # Simple sharpening kernel
-        channel_sharpened = cv2.filter2D(unsharp_mask, -1, kernel)
-
-        # Reconstruct the image by applying the inverse DWT with the sharpened channels
+        # Reconstruct the image by applying the inverse DWT
         coeffs2_enhanced = LL, (LH, HL, HH)
         channel_enhanced = pywt.idwt2(coeffs2_enhanced, 'haar')
 
@@ -43,7 +28,7 @@ def dwt_image_enhancement(img):
 
         return channel_enhanced
 
-    # Apply DWT enhancement, histogram equalization, contrast stretching (CLAHE), and sharpening to each color channel
+    # Apply DWT enhancement to each color channel
     b_enhanced = process_channel(b)
     g_enhanced = process_channel(g)
     r_enhanced = process_channel(r)
@@ -76,7 +61,7 @@ for filename in os.listdir(input_folder):
         print(f"Error: Unable to load the image {filename}. Skipping.")
         continue
 
-    # Apply DWT-based image enhancement with histogram equalization, contrast, sharpening, and clarity improvement
+    # Apply DWT-based image enhancement
     img_enhanced = dwt_image_enhancement(img)
 
     # Save the enhanced image
@@ -85,7 +70,7 @@ for filename in os.listdir(input_folder):
 
     # Optionally, display original and enhanced images
     cv2.imshow("Original Image", img)
-    cv2.imshow("Enhanced Image (DWT + Histogram Equalization + CLAHE + Sharpening)", img_enhanced)
+    cv2.imshow("Enhanced Image (DWT)", img_enhanced)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
