@@ -1,77 +1,58 @@
 import cv2
 import numpy as np
-import pywt
-import os
+import matplotlib.pyplot as plt
 
-# Function to apply DWT-based image enhancement
-def dwt_image_enhancement(img):
-    # Split the image into BGR channels
-    b, g, r = cv2.split(img)
+# Function to enhance the underwater image
+def enhance_underwater_image(image):
+    # Convert to float32 for better manipulation
+    image_float = np.float32(image)
 
-    def process_channel(channel):
-        # Perform 2-level Discrete Wavelet Transform (DWT)
-        coeffs2 = pywt.dwt2(channel, 'haar')  # Using Haar wavelet (you can change the wavelet type)
-        LL, (LH, HL, HH) = coeffs2
+    # 1. Adjust contrast and brightness
+    contrast = 1.3  # Increase contrast
+    brightness = 20  # Increase brightness slightly
+    enhanced_image = cv2.convertScaleAbs(image_float, alpha=contrast, beta=brightness)
 
-        # Enhancement by modifying high-frequency components
-        LH = np.multiply(LH, 1.5)  # Amplify horizontal details
-        HL = np.multiply(HL, 1.5)  # Amplify vertical details
-        HH = np.multiply(HH, 2.0)  # Amplify diagonal details
+    # 2. Denoising (remove noise using Non-Local Means Denoising)
+    enhanced_image = cv2.fastNlMeansDenoisingColored(enhanced_image, None, 10, 10, 7, 21)
 
-        # Reconstruct the image by applying the inverse DWT
-        coeffs2_enhanced = LL, (LH, HL, HH)
-        channel_enhanced = pywt.idwt2(coeffs2_enhanced, 'haar')
+    # 3. Color Correction (using white balance adjustment)
+    # Convert to LAB color space to adjust brightness and color balance
+    lab_image = cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab_image)
 
-        # Normalize to the range [0, 255]
-        channel_enhanced = np.clip(channel_enhanced, 0, 255)
-        channel_enhanced = channel_enhanced.astype(np.uint8)
+    # Enhance L (luminance) channel for brightness
+    l = cv2.equalizeHist(l)  # Apply histogram equalization to luminance channel
 
-        return channel_enhanced
+    # Merge the channels back
+    enhanced_image = cv2.merge((l, a, b))
 
-    # Apply DWT enhancement to each color channel
-    b_enhanced = process_channel(b)
-    g_enhanced = process_channel(g)
-    r_enhanced = process_channel(r)
+    # Convert back to BGR color space
+    enhanced_image = cv2.cvtColor(enhanced_image, cv2.COLOR_LAB2BGR)
 
-    # Merge the enhanced channels back
-    img_enhanced = cv2.merge((b_enhanced, g_enhanced, r_enhanced))
+    # 4. Optional: Apply sharpness enhancement (Optional)
+    kernel = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])  # Sharpening filter
+    enhanced_image = cv2.filter2D(enhanced_image, -1, kernel)
 
-    return img_enhanced
+    # Ensure the image is within proper range
+    enhanced_image = np.uint8(np.clip(enhanced_image, 0, 255))
 
-# Define input and output folders
-input_folder = r"C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\output_images"  # Change to your input folder
-output_folder = r"C:\path\to\enhanced_image"  # Change to your output folder
+    return enhanced_image
 
-# Create output folder if it doesn't exist
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
+# Load the original underwater image
+image = cv2.imread(r'C:\Users\albin John\OneDrive\Desktop\java\PROJECT\abel\input_images\set_o34.jpg')
 
-# Read images from the input folder, enhance them and save to the output folder
-for filename in os.listdir(input_folder):
-    img_path = os.path.join(input_folder, filename)
+# Enhance the image
+enhanced_image = enhance_underwater_image(image)
 
-    # Only process image files (skip non-image files)
-    if not os.path.isfile(img_path):
-        continue
+# Display the original and enhanced image side by side
+plt.subplot(1, 2, 1)
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+plt.title("Original Image")
+plt.axis('off')
 
-    # Load image
-    img = cv2.imread(img_path)
+plt.subplot(1, 2, 2)
+plt.imshow(cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2RGB))
+plt.title("Enhanced Image")
+plt.axis('off')
 
-    if img is None:
-        print(f"Error: Unable to load the image {filename}. Skipping.")
-        continue
-
-    # Apply DWT-based image enhancement
-    img_enhanced = dwt_image_enhancement(img)
-
-    # Save the enhanced image
-    enhanced_img_path = os.path.join(output_folder, filename)
-    cv2.imwrite(enhanced_img_path, img_enhanced)
-
-    # Optionally, display original and enhanced images
-    cv2.imshow("Original Image", img)
-    cv2.imshow("Enhanced Image (DWT)", img_enhanced)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-print("Image enhancement completed and saved to the output folder.")
+plt.show()
